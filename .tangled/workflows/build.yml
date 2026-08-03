@@ -1,0 +1,13 @@
+when:
+  - event: [push, pull_request]
+    branch: [main]
+
+engine: nixery
+
+dependencies:
+  nixpkgs:
+    - nix
+
+steps:
+  - name: Build
+    command: nix build --print-build-logs
