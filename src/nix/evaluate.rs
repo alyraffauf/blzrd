@@ -2,9 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 
 use crate::models::{JobSpec, NixEvalJobsResult, SystemType};
-use crate::process::{get_config_attr, run_json_lines};
+use crate::process::{run_json, run_json_lines};
+
+const NODE_METADATA_PROJECTION: &str =
+    "node: { hostname = node.hostname or \"\"; user = node.user or \"\"; type = node.type or \"\"; }";
 
 #[derive(Debug, Clone)]
 pub enum EvaluationProgress {
@@ -124,9 +128,10 @@ async fn build_job_specs(
 
     for name in names {
         let (output, drv_path) = basics.get(&name).cloned().unwrap_or_default();
-        let hostname = configured_hostname(cfg, &name).await;
-        let user = configured_value(cfg, &name, "user").await;
-        let system = configured_system(cfg, &name, results).await?;
+        let metadata = node_metadata(cfg, &name).await;
+        let hostname = metadata.hostname_or_name(&name);
+        let user = metadata.user();
+        let system = metadata.system_type(&name, results)?;
 
         if output.is_empty() {
             anyhow::bail!("job {name}: missing output path");
@@ -150,34 +155,20 @@ async fn build_job_specs(
     Ok(jobs)
 }
 
-async fn configured_hostname(cfg: &str, name: &str) -> String {
-    let hostname = configured_value(cfg, name, "hostname").await;
-    if hostname.is_empty() {
-        name.to_owned()
-    } else {
-        hostname
-    }
-}
-
-async fn configured_value(cfg: &str, name: &str, attribute: &str) -> String {
-    get_config_attr(cfg, name, attribute)
-        .await
-        .unwrap_or_default()
-}
-
-async fn configured_system(
-    cfg: &str,
-    name: &str,
-    results: &[NixEvalJobsResult],
-) -> Result<SystemType> {
-    let configured_type = configured_value(cfg, name, "type").await;
-    let type_name = if configured_type.is_empty() {
-        infer_system_type(name, results)?
-    } else {
-        configured_type
-    };
-
-    SystemType::parse(&type_name).map_err(|error| anyhow::anyhow!("job {name}: {error}"))
+async fn node_metadata(cfg: &str, name: &str) -> NodeMetadata {
+    let node_reference = format!("{cfg}#blzrd.nodes.{name}");
+    run_json(
+        "nix",
+        &[
+            "eval",
+            "--json",
+            "--apply",
+            NODE_METADATA_PROJECTION,
+            &node_reference,
+        ],
+    )
+    .await
+    .unwrap_or_default()
 }
 
 fn infer_system_type(name: &str, results: &[NixEvalJobsResult]) -> Result<String> {
@@ -199,5 +190,55 @@ fn infer_system_type(name: &str, results: &[NixEvalJobsResult]) -> Result<String
         Ok("nixos".to_string())
     } else {
         anyhow::bail!("job {name}: unknown system type: {system}");
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct NodeMetadata {
+    hostname: Option<String>,
+    user: Option<String>,
+    #[serde(rename = "type")]
+    type_name: Option<String>,
+}
+
+impl NodeMetadata {
+    fn hostname_or_name(&self, name: &str) -> String {
+        self.hostname
+            .as_deref()
+            .filter(|hostname| !hostname.is_empty())
+            .unwrap_or(name)
+            .to_owned()
+    }
+
+    fn user(&self) -> String {
+        self.user.clone().unwrap_or_default()
+    }
+
+    fn system_type(&self, name: &str, results: &[NixEvalJobsResult]) -> Result<SystemType> {
+        let configured_type = self
+            .type_name
+            .as_deref()
+            .filter(|type_name| !type_name.is_empty())
+            .map(str::to_owned);
+        let type_name = match configured_type {
+            Some(type_name) => type_name,
+            None => infer_system_type(name, results)?,
+        };
+
+        SystemType::parse(&type_name).map_err(|error| anyhow::anyhow!("job {name}: {error}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_metadata_accepts_a_null_hostname() {
+        let metadata: NodeMetadata =
+            serde_json::from_str(r#"{"hostname":null,"type":"nixos","user":"root"}"#).unwrap();
+
+        assert_eq!(metadata.hostname_or_name("jubilife"), "jubilife");
+        assert_eq!(metadata.user(), "root");
     }
 }

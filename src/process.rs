@@ -140,8 +140,3 @@ pub(crate) fn log_debug(command: &str, std_out: &str, std_err: &str) {
         log::debug!("stderr:\n{}", std_err.trim());
     }
 }
-
-pub async fn get_config_attr(cfg: &str, job: &str, attr: &str) -> Result<String> {
-    let attr_path = format!("{cfg}#blzrd.nodes.{job}.{attr}");
-    run_json("nix", &["eval", "--json", &attr_path]).await
-}
