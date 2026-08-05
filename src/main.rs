@@ -3,12 +3,14 @@ mod models;
 mod nix;
 mod op;
 mod process;
+mod ssh;
 
 use std::collections::HashSet;
 
 use futures::future::join_all;
 
 use crate::cli::{Command, CommonArgs};
+use crate::ssh::HostKeyPolicy;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -96,12 +98,18 @@ async fn run_deploy(
 
     log::info!("Operation {} is valid for all nodes", op);
 
+    let host_key_policy = if common.accept_new_host_keys {
+        HostKeyPolicy::AcceptNew
+    } else {
+        HostKeyPolicy::Strict
+    };
+
     // Build each node's closure locally or on a remote builder.
     log::info!("Building {} output(s)...", jobs.len());
     let mut outs: std::collections::HashMap<String, String> =
         std::collections::HashMap::with_capacity(jobs.len());
     for (name, spec) in &jobs {
-        let (out, _debug) = nix::build_closure(spec, &common.build_host).await?;
+        let (out, _debug) = nix::build_closure(spec, &common.build_host, host_key_policy).await?;
         log::info!(" ✔ {name} ({})", spec.system);
         outs.insert(name.clone(), out);
     }
@@ -116,7 +124,7 @@ async fn run_deploy(
             let name = name.clone();
             let spec = spec.clone();
             async move {
-                let result = nix::deploy_closure(&spec, &out, op).await;
+                let result = nix::deploy_closure(&spec, &out, op, host_key_policy).await;
                 (name, spec, result)
             }
         })

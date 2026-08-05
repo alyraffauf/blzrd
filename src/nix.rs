@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use crate::models::{BuildResult, DebugInfo, JobSpec, NixEvalJobsResult, SystemType};
 use crate::op::Operation;
-use crate::process::{get_config_attr, run, run_json};
+use crate::process::{get_config_attr, run, run_json, run_json_with_env, run_with_env};
+use crate::ssh::{run as run_ssh, HostKeyPolicy};
 
 /// Evaluate the flake's `blzrd.nodes` and return enriched `JobSpec`s.
 pub async fn eval_deployments(cfg: &str) -> Result<(HashMap<String, JobSpec>, Vec<DebugInfo>)> {
@@ -169,7 +170,11 @@ async fn build_job_specs(
 }
 
 /// Build a job's derivation and return the `out` store path.
-pub async fn build_closure(spec: &JobSpec, build_host: &str) -> Result<(String, DebugInfo)> {
+pub async fn build_closure(
+    spec: &JobSpec,
+    build_host: &str,
+    host_key_policy: HostKeyPolicy,
+) -> Result<(String, DebugInfo)> {
     let drv = format!("{}^*", spec.drv_path);
 
     if build_host == "localhost" {
@@ -185,16 +190,19 @@ pub async fn build_closure(spec: &JobSpec, build_host: &str) -> Result<(String, 
 
     // Remote builder branch.
     let store = format!("ssh-ng://{build_host}");
+    let nix_ssh_options = nix_ssh_options(host_key_policy);
+    let nix_env = [("NIX_SSHOPTS", nix_ssh_options.as_str())];
 
     // 1. Copy the derivation to the builder.
-    let (_out, _debug) = run("nix", &["copy", "--to", &store, &spec.drv_path])
+    let (_out, _debug) = run_with_env("nix", &["copy", "--to", &store, &spec.drv_path], &nix_env)
         .await
         .with_context(|| format!("copy to {build_host}"))?;
 
     // 2. Build on the builder.
-    let (results, debug): (Vec<BuildResult>, _) = run_json(
+    let (results, debug): (Vec<BuildResult>, _) = run_json_with_env(
         "nix",
         &["build", "--no-link", "--json", "--store", &store, &drv],
+        &nix_env,
     )
     .await
     .with_context(|| format!("build on {build_host}"))?;
@@ -206,16 +214,20 @@ pub async fn build_closure(spec: &JobSpec, build_host: &str) -> Result<(String, 
         .context("build result missing 'out' output")?;
 
     // 3. Copy the out path back.
-    let (_out, _debug2) = run("nix", &["copy", "--from", &store, &out, "--no-check-sigs"])
-        .await
-        .with_context(|| format!("copy from {build_host}"))?;
+    let (_out, _debug2) = run_with_env(
+        "nix",
+        &["copy", "--from", &store, &out, "--no-check-sigs"],
+        &nix_env,
+    )
+    .await
+    .with_context(|| format!("copy from {build_host}"))?;
 
     Ok((out, debug))
 }
 
 /// Poll a remote `blzrd-activate-*` transient systemd unit until it reaches a
 /// terminal state, then return. Exponential backoff 5 -> 60 seconds, 5-minute deadline.
-async fn poll_activation(target: &str, unit: &str) -> Result<()> {
+async fn poll_activation(target: &str, unit: &str, host_key_policy: HostKeyPolicy) -> Result<()> {
     let mut sleep_val = Duration::from_secs(5);
     let deadline = Instant::now() + Duration::from_secs(300);
 
@@ -224,17 +236,9 @@ async fn poll_activation(target: &str, unit: &str) -> Result<()> {
             anyhow::bail!("activation on {target}: timed out waiting for {unit} unit");
         }
 
-        let args: Vec<&str> = vec![
-            "-o",
-            "ConnectTimeout=5",
-            "-o",
-            "BatchMode=yes",
-            target,
-            "systemctl",
-            "show",
-            unit,
-        ];
-        let result = run("ssh", &args).await.ok();
+        let result = run_ssh(target, "systemctl", &["show", unit], host_key_policy)
+            .await
+            .ok();
 
         let mut sub_state: Option<String> = None;
         let mut exec_status: Option<i32> = None;
@@ -283,7 +287,12 @@ async fn poll_activation(target: &str, unit: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Result<DebugInfo> {
+pub async fn deploy_closure(
+    spec: &JobSpec,
+    out_path: &str,
+    op: Operation,
+    host_key_policy: HostKeyPolicy,
+) -> Result<DebugInfo> {
     let target = spec.target();
     let path = out_path.to_string();
 
@@ -296,21 +305,15 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
     match (sys, op) {
         (SystemType::Darwin, Operation::Switch) => {
             cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "PATH=/run/current-system/sw/bin:$PATH".into(),
-                "sudo".into(),
-                "nix-env".into(),
+                "/run/current-system/sw/bin/sudo".into(),
+                "/run/current-system/sw/bin/nix-env".into(),
                 "-p".into(),
                 "/nix/var/nix/profiles/system".into(),
                 "--set".into(),
                 path.clone(),
             ]);
             cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "PATH=/run/current-system/sw/bin:$PATH".into(),
-                "sudo".into(),
+                "/run/current-system/sw/bin/sudo".into(),
                 format!("{path}/activate"),
             ]);
         }
@@ -324,20 +327,16 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
 
         (SystemType::Nixos, Operation::Switch) => {
             cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "sudo".into(),
-                "nix-env".into(),
+                "/run/current-system/sw/bin/sudo".into(),
+                "/run/current-system/sw/bin/nix-env".into(),
                 "-p".into(),
                 "/nix/var/nix/profiles/system".into(),
                 "--set".into(),
                 path.clone(),
             ]);
             cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "sudo".into(),
-                "systemd-run".into(),
+                "/run/current-system/sw/bin/sudo".into(),
+                "/run/current-system/sw/bin/systemd-run".into(),
                 "--unit".into(),
                 unit.clone(),
                 "--remain-after-exit".into(),
@@ -350,19 +349,15 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
 
         (SystemType::Nixos, Operation::Boot) => {
             cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "sudo".into(),
-                "nix-env".into(),
+                "/run/current-system/sw/bin/sudo".into(),
+                "/run/current-system/sw/bin/nix-env".into(),
                 "-p".into(),
                 "/nix/var/nix/profiles/system".into(),
                 "--set".into(),
                 path.clone(),
             ]);
             cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "sudo".into(),
+                "/run/current-system/sw/bin/sudo".into(),
                 format!("{path}/bin/switch-to-configuration"),
                 op.to_string(),
             ]);
@@ -370,7 +365,9 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
     }
 
     // 1. Copy the closure to the target.
-    let (_out, debug) = run(
+    let nix_ssh_options = nix_ssh_options(host_key_policy);
+    let nix_env = [("NIX_SSHOPTS", nix_ssh_options.as_str())];
+    let (_out, debug) = run_with_env(
         "nix",
         &[
             "copy",
@@ -379,6 +376,7 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
             &path,
             "--no-check-sigs",
         ],
+        &nix_env,
     )
     .await
     .with_context(|| format!("copy to {target}"))?;
@@ -386,16 +384,24 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
     // 2. Run each activation command in order.
     for cmd in &cmds {
         let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
-        let (_out, _d) = run(&cmd[0], &args)
+        let (_out, _d) = run_ssh(&target, &cmd[0], &args, host_key_policy)
             .await
             .with_context(|| format!("activation on {target}"))?;
     }
 
     if matches!((sys, op), (SystemType::Nixos, Operation::Switch)) {
-        poll_activation(&target, &unit)
+        poll_activation(&target, &unit, host_key_policy)
             .await
             .with_context(|| format!("activation on {target}"))?;
     }
 
     Ok(debug)
+}
+
+fn nix_ssh_options(host_key_policy: HostKeyPolicy) -> String {
+    let host_key_option = host_key_policy.nix_ssh_option();
+    match std::env::var("NIX_SSHOPTS") {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {host_key_option}"),
+        _ => host_key_option.to_string(),
+    }
 }

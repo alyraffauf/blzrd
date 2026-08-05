@@ -28,6 +28,7 @@ blzrd switch --flake <flake-url>
 
 - `--flake <url>`: Flake URL or path (env: `FLAKE`, default: `.`). Global; can be placed before or after the subcommand.
 - `--build-host <host>`: Build closures on this remote host instead of locally (default: `localhost`).
+- `--accept-new-host-keys`: Accept and record previously unknown SSH host keys. Changed keys are still rejected.
 - `--skip <nodes>`: Comma-separated nodes to skip.
 - positional `nodes`: Nodes to deploy (default: all). Accepts a comma- or space-separated list.
 - `RUST_LOG=debug`: Enable debug output showing every subprocess command and its output.

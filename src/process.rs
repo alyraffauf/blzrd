@@ -5,10 +5,23 @@ use tokio::process::Command;
 use crate::models::DebugInfo;
 
 pub async fn run(cmd: &str, args: &[&str]) -> Result<(Vec<u8>, DebugInfo)> {
+    run_with_env(cmd, args, &[]).await
+}
+
+pub async fn run_with_env(
+    cmd: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(Vec<u8>, DebugInfo)> {
     let display = format!("{} {}", cmd, args.join(" "));
 
-    let output = Command::new(cmd)
-        .args(args)
+    let mut command = Command::new(cmd);
+    command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+
+    let output = command
         .output()
         .await
         .with_context(|| format!("failed to spawn {display}"))?;
@@ -40,10 +53,23 @@ pub async fn run(cmd: &str, args: &[&str]) -> Result<(Vec<u8>, DebugInfo)> {
 
 /// Run `cmd args...` and deserialize the JSON output into a struct of type `T`.
 pub async fn run_json<T: DeserializeOwned>(cmd: &str, args: &[&str]) -> Result<(T, DebugInfo)> {
+    run_json_with_env(cmd, args, &[]).await
+}
+
+pub async fn run_json_with_env<T: DeserializeOwned>(
+    cmd: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(T, DebugInfo)> {
     let display = format!("{} {}", cmd, args.join(" "));
 
-    let output = Command::new(cmd)
-        .args(args)
+    let mut command = Command::new(cmd);
+    command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+
+    let output = command
         .output()
         .await
         .with_context(|| format!("failed to spawn {display}"))?;
@@ -76,7 +102,7 @@ pub async fn run_json<T: DeserializeOwned>(cmd: &str, args: &[&str]) -> Result<(
 }
 
 /// Emit a `DebugInfo` at the debug log level (only visible with `--debug`).
-fn log_debug(debug: &DebugInfo) {
+pub(crate) fn log_debug(debug: &DebugInfo) {
     log::debug!("$ {}", debug.command);
     if !debug.std_out.trim().is_empty() {
         log::debug!("stdout:\n{}", debug.std_out.trim());

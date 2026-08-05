@@ -28,6 +28,10 @@ pub struct CommonArgs {
     /// Build closures on a remote host instead of locally.
     #[arg(long, default_value = "localhost")]
     pub build_host: String,
+
+    /// Accept and record previously unknown SSH host keys.
+    #[arg(long)]
+    pub accept_new_host_keys: bool,
 }
 
 #[derive(Subcommand, Debug)]
