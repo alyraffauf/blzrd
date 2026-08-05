@@ -3,7 +3,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use openssh::{KnownHosts, SessionBuilder};
 
-use crate::models::DebugInfo;
 use crate::process::log_debug;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -36,7 +35,7 @@ pub async fn run(
     program: &str,
     args: &[&str],
     host_key_policy: HostKeyPolicy,
-) -> Result<(Vec<u8>, DebugInfo)> {
+) -> Result<Vec<u8>> {
     let display = format!("ssh {target} {program} {}", args.join(" "));
 
     let mut builder = SessionBuilder::default();
@@ -64,22 +63,16 @@ pub async fn run(
 
     let std_out = String::from_utf8_lossy(&output.stdout).into_owned();
     let std_err = String::from_utf8_lossy(&output.stderr).into_owned();
-    let debug = DebugInfo {
-        command: display.clone(),
-        std_out,
-        std_err: std_err.clone(),
-    };
-
-    log_debug(&debug);
+    log_debug(&display, &std_out, &std_err);
 
     if !output.status.success() {
         let detail = if std_err.trim().is_empty() {
-            &debug.std_out
+            &std_out
         } else {
-            &debug.std_err
+            &std_err
         };
         anyhow::bail!("{display} failed: {}", detail.trim());
     }
 
-    Ok((output.stdout, debug))
+    Ok(output.stdout)
 }

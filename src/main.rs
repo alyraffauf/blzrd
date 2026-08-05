@@ -4,13 +4,11 @@ mod nix;
 mod op;
 mod process;
 mod ssh;
+mod ui;
+mod workflow;
 
-use std::collections::HashSet;
-
-use futures::stream::{self, StreamExt};
-
-use crate::cli::{Command, CommonArgs};
-use crate::ssh::HostKeyPolicy;
+use crate::cli::Command;
+use crate::nix::EvaluationProgress;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -23,148 +21,41 @@ async fn main() -> anyhow::Result<()> {
         .format_target(false)
         .init();
 
-    let start = std::time::Instant::now();
+    let ui = ui::Ui::new();
 
-    log::info!("Reading nodes from {}", args.flake);
-    let (jobs, _debug) = nix::eval_deployments(&args.flake).await?;
+    let mut evaluation = ui.start_section("Evaluating");
+    let eval_result = nix::eval_deployments(&args.flake, |progress| match progress {
+        EvaluationProgress::JobEvaluated { name } => {
+            ui.add_job(&mut evaluation, &name, &name);
+            ui.start_job(&evaluation, &name, &name);
+        }
+        EvaluationProgress::MetadataResolved { name } => {
+            ui.finish_job_success(ui.job_progress(&evaluation, &name), &name);
+        }
+    })
+    .await;
+
+    let jobs = match eval_result {
+        Ok(result) => {
+            ui.finish_section_success(evaluation);
+            result
+        }
+        Err(error) => {
+            ui.finish_section_failure(evaluation);
+            return Err(error);
+        }
+    };
 
     match args.command {
         Command::List => {
-            print_nodes(&jobs);
+            ui.print_nodes(&jobs);
             return Ok(());
         }
         cmd @ (Command::Switch(_) | Command::Boot(_)) => {
             let (op, common) = cmd.into_deploy().expect("deploy command");
-            run_deploy(op, common, jobs, start).await?;
+            workflow::run_deploy(op, common, jobs, &ui).await?;
         }
     }
 
-    Ok(())
-}
-
-/// Apply the `--skip` and `nodes` filters to the evaluated job map.
-fn filter_jobs(
-    mut jobs: std::collections::HashMap<String, crate::models::JobSpec>,
-    common: &CommonArgs,
-) -> anyhow::Result<std::collections::HashMap<String, crate::models::JobSpec>> {
-    let all_names: HashSet<&String> = jobs.keys().collect();
-
-    for s in &common.skip {
-        if !all_names.contains(&s) {
-            log::warn!("ignoring unknown node '{s}' in --skip");
-        }
-    }
-
-    if !common.nodes.is_empty() {
-        for n in &common.nodes {
-            if !all_names.contains(&n) {
-                anyhow::bail!("node '{n}' not found in flake");
-            }
-        }
-    }
-
-    jobs.retain(|name, _| !common.skip.iter().any(|s| s == name));
-    if !common.nodes.is_empty() {
-        jobs.retain(|name, _| common.nodes.iter().any(|n| n == name));
-    }
-
-    Ok(jobs)
-}
-
-/// Print the resolved node list with their system/user/host.
-fn print_nodes(jobs: &std::collections::HashMap<String, crate::models::JobSpec>) {
-    log::info!("Found {} node(s):", jobs.len());
-    for (name, spec) in jobs {
-        log::info!(
-            "  {name} -> system={} user={} host={}",
-            spec.system,
-            spec.user,
-            spec.hostname,
-        );
-    }
-}
-
-/// Filter, validate, build, and deploy the jobs for the given operation.
-async fn run_deploy(
-    op: crate::op::Operation,
-    common: CommonArgs,
-    jobs: std::collections::HashMap<String, crate::models::JobSpec>,
-    start: std::time::Instant,
-) -> anyhow::Result<()> {
-    let jobs = filter_jobs(jobs, &common)?;
-    print_nodes(&jobs);
-
-    op::validate(&jobs, op)?;
-
-    log::info!("Operation {op} is valid for all nodes");
-
-    let host_key_policy = if common.accept_new_host_keys {
-        HostKeyPolicy::AcceptNew
-    } else {
-        HostKeyPolicy::Strict
-    };
-
-    // Build each node's closure locally or on a remote builder.
-    log::info!("Building {} output(s)...", jobs.len());
-    let mut outs: std::collections::HashMap<String, String> =
-        std::collections::HashMap::with_capacity(jobs.len());
-    for (name, spec) in &jobs {
-        let (out, _debug) = nix::build_closure(spec, &common.build_host, host_key_policy).await?;
-        log::info!(" ✔ {name} ({})", spec.system);
-        outs.insert(name.clone(), out);
-    }
-
-    log::info!("Deploying {} output(s)...", jobs.len());
-
-    // One future per node, run concurrently.
-    let tasks: Vec<_> = jobs
-        .iter()
-        .map(|(name, spec)| {
-            let out = outs[name].clone();
-            let name = name.clone();
-            let spec = spec.clone();
-            async move {
-                let result = nix::deploy_closure(&spec, &out, op, host_key_policy).await;
-                (name, spec, result)
-            }
-        })
-        .collect();
-
-    let results = stream::iter(tasks)
-        .buffer_unordered(common.parallel)
-        .collect::<Vec<_>>()
-        .await;
-
-    let errors: Vec<_> = results
-        .into_iter()
-        .filter_map(|(name, spec, result)| match result {
-            Ok(_) => {
-                log::info!(
-                    " ✔ {name} ({}) -> {}@{}",
-                    spec.system,
-                    spec.user,
-                    spec.hostname
-                );
-                None
-            }
-            Err(e) => {
-                let target = spec.target();
-                log::warn!("Failed to deploy to {target}: {e}");
-                Some(e)
-            }
-        })
-        .collect();
-
-    let duration = start.elapsed();
-
-    if !errors.is_empty() {
-        log::info!(
-            "Deployment failed with {} error(s) ({duration:?})",
-            errors.len()
-        );
-        anyhow::bail!("deployment failed");
-    }
-
-    log::info!("Completed successfully in {duration:?}");
     Ok(())
 }

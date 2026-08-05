@@ -27,14 +27,6 @@ impl fmt::Display for SystemType {
     }
 }
 
-/// Captured details of a subprocess invocation, for debug logging.
-#[derive(Debug, Clone, Default)]
-pub struct DebugInfo {
-    pub command: String,
-    pub std_out: String,
-    pub std_err: String,
-}
-
 #[derive(Debug, Clone)]
 pub struct JobSpec {
     pub hostname: String,
