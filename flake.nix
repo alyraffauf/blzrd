@@ -26,5 +26,10 @@
         ./flake/treefmt.nix
         inputs.treefmt-nix.flakeModule
       ];
+
+      flake = {
+        flakeModule = ./flake/blzrd.nix;
+        lib = import ./flake/lib.nix {lib = inputs.nixpkgs.lib;};
+      };
     };
 }

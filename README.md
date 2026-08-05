@@ -78,6 +78,11 @@ The deployment user must be specified. Non-root users require passwordless `sudo
 }
 ```
 
+### Flake validation
+
+For module and library integration, see
+[the flake integration guide](docs/flake-integration.md).
+
 ## Limitations
 
 - Requires SSH root access or the ability to escalate privileges with sudo without password entry. It won't prompt for a password, it just fails.
