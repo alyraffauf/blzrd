@@ -115,7 +115,6 @@ async fn build_job_specs(
             }
         }
 
-        // user
         let mut user = String::new();
         if let Ok((u, debug)) = get_config_attr(cfg, name, "user").await {
             debug_infos.push(debug);
@@ -154,7 +153,6 @@ async fn build_job_specs(
         if user.is_empty() {
             anyhow::bail!("job {name}: missing user");
         }
-
         jobs.insert(
             name.clone(),
             JobSpec {
@@ -304,18 +302,17 @@ pub async fn deploy_closure(
 
     match (sys, op) {
         (SystemType::Darwin, Operation::Switch) => {
-            cmds.push(vec![
-                "/run/current-system/sw/bin/sudo".into(),
+            cmds.push(root_command(
+                spec,
                 "/run/current-system/sw/bin/nix-env".into(),
-                "-p".into(),
-                "/nix/var/nix/profiles/system".into(),
-                "--set".into(),
-                path.clone(),
-            ]);
-            cmds.push(vec![
-                "/run/current-system/sw/bin/sudo".into(),
-                format!("{path}/activate"),
-            ]);
+                vec![
+                    "-p".into(),
+                    "/nix/var/nix/profiles/system".into(),
+                    "--set".into(),
+                    path.clone(),
+                ],
+            ));
+            cmds.push(root_command(spec, format!("{path}/activate"), vec![]));
         }
 
         (SystemType::Darwin, Operation::Boot) => {
@@ -326,41 +323,47 @@ pub async fn deploy_closure(
         }
 
         (SystemType::Nixos, Operation::Switch) => {
-            cmds.push(vec![
-                "/run/current-system/sw/bin/sudo".into(),
+            cmds.push(root_command(
+                spec,
                 "/run/current-system/sw/bin/nix-env".into(),
-                "-p".into(),
-                "/nix/var/nix/profiles/system".into(),
-                "--set".into(),
-                path.clone(),
-            ]);
-            cmds.push(vec![
-                "/run/current-system/sw/bin/sudo".into(),
+                vec![
+                    "-p".into(),
+                    "/nix/var/nix/profiles/system".into(),
+                    "--set".into(),
+                    path.clone(),
+                ],
+            ));
+            cmds.push(root_command(
+                spec,
                 "/run/current-system/sw/bin/systemd-run".into(),
-                "--unit".into(),
-                unit.clone(),
-                "--remain-after-exit".into(),
-                "--no-block".into(),
-                "--".into(),
-                format!("{path}/bin/switch-to-configuration"),
-                op.to_string(),
-            ]);
+                vec![
+                    "--unit".into(),
+                    unit.clone(),
+                    "--remain-after-exit".into(),
+                    "--no-block".into(),
+                    "--".into(),
+                    format!("{path}/bin/switch-to-configuration"),
+                    op.to_string(),
+                ],
+            ));
         }
 
         (SystemType::Nixos, Operation::Boot) => {
-            cmds.push(vec![
-                "/run/current-system/sw/bin/sudo".into(),
+            cmds.push(root_command(
+                spec,
                 "/run/current-system/sw/bin/nix-env".into(),
-                "-p".into(),
-                "/nix/var/nix/profiles/system".into(),
-                "--set".into(),
-                path.clone(),
-            ]);
-            cmds.push(vec![
-                "/run/current-system/sw/bin/sudo".into(),
+                vec![
+                    "-p".into(),
+                    "/nix/var/nix/profiles/system".into(),
+                    "--set".into(),
+                    path.clone(),
+                ],
+            ));
+            cmds.push(root_command(
+                spec,
                 format!("{path}/bin/switch-to-configuration"),
-                op.to_string(),
-            ]);
+                vec![op.to_string()],
+            ));
         }
     }
 
@@ -404,4 +407,17 @@ fn nix_ssh_options(host_key_policy: HostKeyPolicy) -> String {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing} {host_key_option}"),
         _ => host_key_option.to_string(),
     }
+}
+
+fn root_command(spec: &JobSpec, program: String, args: Vec<String>) -> Vec<String> {
+    let mut command = Vec::with_capacity(args.len() + 3);
+
+    if spec.user != "root" {
+        command.push("sudo".into());
+        command.push("-n".into());
+    }
+
+    command.push(program);
+    command.extend(args);
+    command
 }

@@ -57,6 +57,8 @@ blzrd list --flake github:alyraffauf/infra
 
 blzrd is configured with a Flake output containing an attrset that defines a set of deployment jobs. Outputs can be declared in the same Flake or in an upstream Flake.
 
+The deployment user must be specified. Non-root users require passwordless `sudo` access.
+
 ```nix
 {
   blzrd.nodes = {
