@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
             print_nodes(&jobs);
             return Ok(());
         }
-        cmd @ (Command::Switch(_) | Command::Boot(_) | Command::Test(_) | Command::Activate(_)) => {
+        cmd @ (Command::Switch(_) | Command::Boot(_)) => {
             let (op, common) = cmd.into_deploy().expect("deploy command");
             run_deploy(op, common, jobs, start).await?;
         }
@@ -92,10 +92,7 @@ async fn run_deploy(
     let jobs = filter_jobs(jobs, &common)?;
     print_nodes(&jobs);
 
-    let warnings = op::validate(&jobs, op)?;
-    for warning in &warnings {
-        log::warn!("{warning}");
-    }
+    op::validate(&jobs, op)?;
 
     log::info!("Operation {} is valid for all nodes", op);
 

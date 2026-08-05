@@ -36,10 +36,6 @@ pub enum Command {
     Switch(CommonArgs),
     /// Set the new configuration as the boot default without activating it.
     Boot(CommonArgs),
-    /// Activate the new configuration without changing the boot default.
-    Test(CommonArgs),
-    /// (darwin) Run the activation script only.
-    Activate(CommonArgs),
     /// List nodes declared in the flake without deploying anything.
     List,
 }
@@ -51,8 +47,6 @@ impl Command {
         match self {
             Command::Switch(a) => Some((Operation::Switch, a)),
             Command::Boot(a) => Some((Operation::Boot, a)),
-            Command::Test(a) => Some((Operation::Test, a)),
-            Command::Activate(a) => Some((Operation::Activate, a)),
             Command::List => None,
         }
     }

@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tokio::time::{sleep, Instant};
+use uuid::Uuid;
 
 use crate::models::{BuildResult, DebugInfo, JobSpec, NixEvalJobsResult, SystemType};
 use crate::op::Operation;
@@ -210,16 +213,88 @@ pub async fn build_closure(spec: &JobSpec, build_host: &str) -> Result<(String, 
     Ok((out, debug))
 }
 
+/// Poll a remote `blzrd-activate-*` transient systemd unit until it reaches a
+/// terminal state, then return. Exponential backoff 5 -> 60 seconds, 5-minute deadline.
+async fn poll_activation(target: &str, unit: &str) -> Result<()> {
+    let mut sleep_val = Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(300);
+
+    loop {
+        if Instant::now() >= deadline {
+            anyhow::bail!("activation on {target}: timed out waiting for {unit} unit");
+        }
+
+        let args: Vec<&str> = vec![
+            "-o",
+            "ConnectTimeout=5",
+            "-o",
+            "BatchMode=yes",
+            target,
+            "systemctl",
+            "show",
+            unit,
+        ];
+        let result = run("ssh", &args).await.ok();
+
+        let mut sub_state: Option<String> = None;
+        let mut exec_status: Option<i32> = None;
+        if let Some((out, debug_info)) = result {
+            let text = String::from_utf8_lossy(&out);
+            log::debug!(
+                "{unit} on {target}:\n{}stderr: {}",
+                text.trim(),
+                debug_info.std_err.trim()
+            );
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("SubState=") {
+                    sub_state = Some(v.trim().to_string());
+                } else if let Some(v) = line.strip_prefix("ExecMainStatus=") {
+                    exec_status = v.trim().parse::<i32>().ok();
+                }
+            }
+        }
+
+        // With --remain-after-exit, the unit stays active but transitions to
+        // SubState=exited once the main process terminates.
+        match (sub_state.as_deref(), exec_status.unwrap_or(0)) {
+            (Some("exited"), 0) => break,
+            (Some("exited"), code) => {
+                anyhow::bail!(
+                    "activation on {target}: switch-to-configuration exited with code {code}"
+                );
+            }
+            (Some("failed"), _) => {
+                anyhow::bail!(
+                    "activation on {target}: unit failed (ExecMainStatus={})",
+                    exec_status.unwrap_or(-1)
+                );
+            }
+            _ => {
+                sleep(sleep_val).await;
+                sleep_val = (sleep_val * 2).min(Duration::from_secs(60));
+            }
+        }
+
+        if sleep_val > Duration::from_secs(60) {
+            anyhow::bail!("activation on {target}: gave up after backoff cap exceeded");
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Result<DebugInfo> {
     let target = spec.target();
     let path = out_path.to_string();
+
+    let unit = format!("blzrd-activate-{}", Uuid::new_v4().simple());
 
     let mut cmds: Vec<Vec<String>> = Vec::new();
 
     let sys = spec.system;
 
     match (sys, op) {
-        (SystemType::Darwin, Operation::Switch | Operation::Test) => {
+        (SystemType::Darwin, Operation::Switch) => {
             cmds.push(vec![
                 "ssh".into(),
                 target.clone(),
@@ -240,17 +315,40 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
             ]);
         }
 
-        (SystemType::Darwin, Operation::Activate) => {
+        (SystemType::Darwin, Operation::Boot) => {
+            anyhow::bail!(
+                "job {}: 'boot' is not a valid darwin operation",
+                spec.hostname
+            );
+        }
+
+        (SystemType::Nixos, Operation::Switch) => {
             cmds.push(vec![
                 "ssh".into(),
                 target.clone(),
-                "PATH=/run/current-system/sw/bin:$PATH".into(),
                 "sudo".into(),
-                format!("{path}/activate"),
+                "nix-env".into(),
+                "-p".into(),
+                "/nix/var/nix/profiles/system".into(),
+                "--set".into(),
+                path.clone(),
+            ]);
+            cmds.push(vec![
+                "ssh".into(),
+                target.clone(),
+                "sudo".into(),
+                "systemd-run".into(),
+                "--unit".into(),
+                unit.clone(),
+                "--remain-after-exit".into(),
+                "--no-block".into(),
+                "--".into(),
+                format!("{path}/bin/switch-to-configuration"),
+                op.to_string(),
             ]);
         }
 
-        (SystemType::Nixos, Operation::Switch | Operation::Boot) => {
+        (SystemType::Nixos, Operation::Boot) => {
             cmds.push(vec![
                 "ssh".into(),
                 target.clone(),
@@ -269,17 +367,6 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
                 op.to_string(),
             ]);
         }
-
-        (SystemType::Nixos, Operation::Test) => {
-            cmds.push(vec![
-                "ssh".into(),
-                target.clone(),
-                "sudo".into(),
-                format!("{path}/bin/switch-to-configuration"),
-                "test".into(),
-            ]);
-        }
-        _ => {}
     }
 
     // 1. Copy the closure to the target.
@@ -300,6 +387,12 @@ pub async fn deploy_closure(spec: &JobSpec, out_path: &str, op: Operation) -> Re
     for cmd in &cmds {
         let args: Vec<&str> = cmd[1..].iter().map(String::as_str).collect();
         let (_out, _d) = run(&cmd[0], &args)
+            .await
+            .with_context(|| format!("activation on {target}"))?;
+    }
+
+    if matches!((sys, op), (SystemType::Nixos, Operation::Switch)) {
+        poll_activation(&target, &unit)
             .await
             .with_context(|| format!("activation on {target}"))?;
     }

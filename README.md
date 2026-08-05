@@ -22,8 +22,6 @@ blzrd switch --flake <flake-url>
 
 - `switch`: Activate the new configuration and make it the boot default.
 - `boot`: Set the new configuration as the boot default without activating.
-- `test`: Activate the new configuration without changing the boot default (NixOS).
-- `activate`: (Darwin) Run the activation script only.
 - `list`: List nodes declared in the flake without deploying anything.
 
 ### Options
