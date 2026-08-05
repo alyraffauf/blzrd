@@ -6,6 +6,8 @@ _: {
     ...
   }: {
     devShells.default = pkgs.mkShell {
+      env.RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+
       packages = with pkgs;
         [
           cargo
