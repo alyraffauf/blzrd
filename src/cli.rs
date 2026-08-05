@@ -32,6 +32,10 @@ pub struct CommonArgs {
     /// Accept and record previously unknown SSH host keys.
     #[arg(long)]
     pub accept_new_host_keys: bool,
+
+    /// Set simultaneous deployments.
+    #[arg(long, default_value_t = 5)]
+    pub parallel: usize,
 }
 
 #[derive(Subcommand, Debug)]

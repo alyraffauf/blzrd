@@ -7,7 +7,7 @@ mod ssh;
 
 use std::collections::HashSet;
 
-use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 
 use crate::cli::{Command, CommonArgs};
 use crate::ssh::HostKeyPolicy;
@@ -130,7 +130,10 @@ async fn run_deploy(
         })
         .collect();
 
-    let results = join_all(tasks).await;
+    let results = stream::iter(tasks)
+        .buffer_unordered(common.parallel)
+        .collect::<Vec<_>>()
+        .await;
 
     let errors: Vec<_> = results
         .into_iter()
