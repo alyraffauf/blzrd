@@ -96,7 +96,7 @@ async fn run_deploy(
 
     op::validate(&jobs, op)?;
 
-    log::info!("Operation {} is valid for all nodes", op);
+    log::info!("Operation {op} is valid for all nodes");
 
     let host_key_policy = if common.accept_new_host_keys {
         HostKeyPolicy::AcceptNew

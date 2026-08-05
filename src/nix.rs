@@ -229,7 +229,7 @@ pub async fn build_closure(
 /// terminal state, then return. Exponential backoff 5 -> 60 seconds, 5-minute deadline.
 async fn poll_activation(target: &str, unit: &str, host_key_policy: HostKeyPolicy) -> Result<()> {
     let mut sleep_val = Duration::from_secs(5);
-    let deadline = Instant::now() + Duration::from_secs(300);
+    let deadline = Instant::now() + Duration::from_mins(5);
 
     loop {
         if Instant::now() >= deadline {
@@ -275,11 +275,11 @@ async fn poll_activation(target: &str, unit: &str, host_key_policy: HostKeyPolic
             }
             _ => {
                 sleep(sleep_val).await;
-                sleep_val = (sleep_val * 2).min(Duration::from_secs(60));
+                sleep_val = (sleep_val * 2).min(Duration::from_mins(1));
             }
         }
 
-        if sleep_val > Duration::from_secs(60) {
+        if sleep_val > Duration::from_mins(1) {
             anyhow::bail!("activation on {target}: gave up after backoff cap exceeded");
         }
     }

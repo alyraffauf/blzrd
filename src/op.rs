@@ -20,12 +20,8 @@ impl fmt::Display for Operation {
 
 pub fn validate(jobs: &HashMap<String, JobSpec>, op: Operation) -> anyhow::Result<()> {
     for (name, spec) in jobs {
-        match (spec.system, op) {
-            (SystemType::Darwin, Operation::Switch) => {}
-            (SystemType::Darwin, Operation::Boot) => {
-                anyhow::bail!("job {name}: 'boot' is not a valid darwin operation");
-            }
-            (SystemType::Nixos, Operation::Boot | Operation::Switch) => {}
+        if matches!((spec.system, op), (SystemType::Darwin, Operation::Boot)) {
+            anyhow::bail!("job {name}: 'boot' is not a valid darwin operation");
         }
     }
 
