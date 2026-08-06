@@ -44,18 +44,14 @@ pub enum Command {
     Switch(CommonArgs),
     /// Set the new configuration as the boot default without activating it.
     Boot(CommonArgs),
-    /// List nodes declared in the flake without deploying anything.
-    List,
 }
 
 impl Command {
     /// Map a deployment command into its logical `Operation` and shared args.
-    /// Returns `None` for non-deployment commands like `List`.
-    pub fn into_deploy(self) -> Option<(Operation, CommonArgs)> {
+    pub fn into_deploy(self) -> (Operation, CommonArgs) {
         match self {
-            Command::Switch(a) => Some((Operation::Switch, a)),
-            Command::Boot(a) => Some((Operation::Boot, a)),
-            Command::List => None,
+            Command::Switch(args) => (Operation::Switch, args),
+            Command::Boot(args) => (Operation::Boot, args),
         }
     }
 }

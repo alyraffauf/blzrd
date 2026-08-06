@@ -22,7 +22,6 @@ blzrd switch --flake <flake-url>
 
 - `switch`: Activate the new configuration and make it the boot default.
 - `boot`: Set the new configuration as the boot default without activating.
-- `list`: List nodes declared in the flake without deploying anything.
 
 ### Options
 
@@ -45,12 +44,6 @@ Deploy specific nodes (positional):
 
 ```
 blzrd switch --flake github:alyraffauf/infra server,workstation
-```
-
-List what's in a flake without deploying:
-
-```
-blzrd list --flake github:alyraffauf/infra
 ```
 
 ### Sample `blzrd.nodes`

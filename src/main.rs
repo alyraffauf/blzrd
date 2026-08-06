@@ -7,7 +7,6 @@ mod ssh;
 mod ui;
 mod workflow;
 
-use crate::cli::Command;
 use crate::nix::EvaluationProgress;
 use crate::ui::Ui;
 
@@ -47,16 +46,8 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    match args.command {
-        Command::List => {
-            Ui::print_nodes(&jobs);
-            return Ok(());
-        }
-        cmd @ (Command::Switch(_) | Command::Boot(_)) => {
-            let (op, common) = cmd.into_deploy().expect("deploy command");
-            workflow::run_deploy(op, common, jobs, &ui).await?;
-        }
-    }
+    let (op, common) = args.command.into_deploy();
+    workflow::run_deploy(op, common, jobs, &ui).await?;
 
     Ok(())
 }

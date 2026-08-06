@@ -7,8 +7,6 @@ use std::time::Duration;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use owo_colors::{OwoColorize, Stream};
 
-use crate::models::JobSpec;
-
 pub struct Ui {
     progress: MultiProgress,
     is_interactive: bool,
@@ -29,15 +27,6 @@ impl Ui {
             is_interactive: io::stderr().is_terminal(),
             retained_progress: Mutex::new(Vec::new()),
             needs_section_separator: Mutex::new(false),
-        }
-    }
-
-    pub fn print_nodes(jobs: &HashMap<String, JobSpec>) {
-        let mut nodes: Vec<_> = jobs.iter().collect();
-        nodes.sort_by_key(|(name, _)| *name);
-
-        for (name, spec) in nodes {
-            eprintln!("{name} · {} · {}", spec.system, spec.target());
         }
     }
 
@@ -114,13 +103,9 @@ impl Ui {
         self.finish_section(section, false);
     }
 
-    pub fn print_completion(&self) {
+    pub fn print_summary(&self, message: &str) {
         self.add_section_separator();
-        let message = format!(
-            "{} {}",
-            success_marker(),
-            phase_heading("Deployment complete")
-        );
+        let message = format!("{} {}", success_marker(), phase_heading(message));
         if self.is_interactive {
             let progress = self.progress.add(ProgressBar::new_spinner());
             progress.set_style(completed_style());

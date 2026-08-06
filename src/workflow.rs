@@ -17,12 +17,7 @@ pub async fn run_deploy(
     jobs: HashMap<String, JobSpec>,
     ui: &Ui,
 ) -> anyhow::Result<()> {
-    let (jobs, unknown_skips) = filter_jobs(jobs, &common)?;
-    for name in unknown_skips {
-        Ui::print_warning(format!("ignoring unknown node '{name}' in --skip"));
-    }
-
-    op::validate(&jobs, operation)?;
+    let jobs = prepare_jobs(jobs, &common, operation)?;
     let host_key_policy = host_key_policy(&common);
     let closures = build_closures(&jobs, &common, host_key_policy, ui).await?;
     deploy_closures(
@@ -34,6 +29,20 @@ pub async fn run_deploy(
         ui,
     )
     .await
+}
+
+fn prepare_jobs(
+    jobs: HashMap<String, JobSpec>,
+    common: &CommonArgs,
+    operation: Operation,
+) -> anyhow::Result<HashMap<String, JobSpec>> {
+    let (jobs, unknown_skips) = filter_jobs(jobs, common)?;
+    for name in unknown_skips {
+        Ui::print_warning(format!("ignoring unknown node '{name}' in --skip"));
+    }
+
+    op::validate(&jobs, operation)?;
+    Ok(jobs)
 }
 
 /// Apply the `--skip` and `nodes` filters to the evaluated job map.
@@ -142,7 +151,7 @@ async fn deploy_closures(
     }
 
     ui.finish_section_success(progress);
-    ui.print_completion();
+    ui.print_summary("Deployment complete");
     Ok(())
 }
 
