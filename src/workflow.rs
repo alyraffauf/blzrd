@@ -102,13 +102,13 @@ async fn build_closures(
             }
             Err(error) => {
                 ui.finish_job_failure(&job_progress, &name, &error);
-                ui.finish_section_failure(progress);
+                ui.finish_section_failure(&progress);
                 return Err(error).context(format!("building {name}"));
             }
         }
     }
 
-    ui.finish_section_success(progress);
+    ui.finish_section_success(&progress);
     Ok(closures)
 }
 
@@ -146,11 +146,11 @@ async fn deploy_closures(
         .await;
 
     if results.iter().any(Result::is_err) {
-        ui.finish_section_failure(progress);
+        ui.finish_section_failure(&progress);
         anyhow::bail!("deployment failed");
     }
 
-    ui.finish_section_success(progress);
+    ui.finish_section_success(&progress);
     ui.print_summary("Deployment complete");
     Ok(())
 }

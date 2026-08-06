@@ -37,11 +37,11 @@ async fn main() -> anyhow::Result<()> {
 
     let jobs = match eval_result {
         Ok(result) => {
-            ui.finish_section_success(evaluation);
+            ui.finish_section_success(&evaluation);
             result
         }
         Err(error) => {
-            ui.finish_section_failure(evaluation);
+            ui.finish_section_failure(&evaluation);
             return Err(error);
         }
     };

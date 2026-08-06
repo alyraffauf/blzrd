@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::{self, IsTerminal};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -9,23 +9,28 @@ use owo_colors::{OwoColorize, Stream};
 
 pub struct Ui {
     progress: MultiProgress,
-    is_interactive: bool,
-    retained_progress: Mutex<Vec<ProgressBar>>,
+    uses_live_progress: bool,
     needs_section_separator: Mutex<bool>,
 }
 
 pub struct SectionProgress {
     name: String,
     progress: ProgressBar,
-    jobs: HashMap<String, ProgressBar>,
+    jobs: HashMap<String, JobProgress>,
+    job_order: Vec<String>,
+}
+
+#[derive(Clone)]
+pub struct JobProgress {
+    progress: ProgressBar,
+    result: Arc<Mutex<Option<String>>>,
 }
 
 impl Ui {
     pub fn new() -> Self {
         Self {
             progress: MultiProgress::new(),
-            is_interactive: io::stderr().is_terminal(),
-            retained_progress: Mutex::new(Vec::new()),
+            uses_live_progress: io::stderr().is_terminal(),
             needs_section_separator: Mutex::new(false),
         }
     }
@@ -38,7 +43,7 @@ impl Ui {
         self.add_section_separator();
 
         let heading = phase_heading(name);
-        if !self.is_interactive {
+        if !self.uses_live_progress {
             eprintln!("⠋ {heading}");
         }
 
@@ -46,6 +51,7 @@ impl Ui {
             name: heading.clone(),
             progress: self.new_section_spinner(heading),
             jobs: HashMap::new(),
+            job_order: Vec::new(),
         }
     }
 
@@ -54,8 +60,12 @@ impl Ui {
             return;
         }
 
-        let progress = self.new_job_spinner(display_name);
+        let progress = JobProgress {
+            progress: self.new_job_spinner(display_name),
+            result: Arc::new(Mutex::new(None)),
+        };
         section.jobs.insert(name.to_owned(), progress);
+        section.job_order.push(name.to_owned());
     }
 
     pub fn start_job(
@@ -63,56 +73,51 @@ impl Ui {
         section: &SectionProgress,
         name: &str,
         display_name: &str,
-    ) -> ProgressBar {
+    ) -> JobProgress {
         let progress = section
             .jobs
             .get(name)
             .expect("job progress must be registered")
             .clone();
-        progress.enable_steady_tick(Duration::from_millis(100));
-        progress.tick();
+        progress
+            .progress
+            .enable_steady_tick(Duration::from_millis(100));
+        progress.progress.tick();
 
-        if !self.is_interactive {
+        if !self.uses_live_progress {
             eprintln!("  ⠋ {display_name}");
         }
 
         progress
     }
 
-    pub fn finish_job_success(&self, progress: &ProgressBar, name: &str) {
+    pub fn finish_job_success(&self, progress: &JobProgress, name: &str) {
         self.finish_job(progress, format!("  {} {name}", success_marker()));
     }
 
-    pub fn finish_job_failure(&self, progress: &ProgressBar, name: &str, error: impl Display) {
+    pub fn finish_job_failure(&self, progress: &JobProgress, name: &str, error: impl Display) {
         self.finish_job(progress, format!("  {} {name}: {error}", failure_marker()));
     }
 
-    pub fn job_progress<'a>(section: &'a SectionProgress, name: &str) -> &'a ProgressBar {
+    pub fn job_progress<'a>(section: &'a SectionProgress, name: &str) -> &'a JobProgress {
         section
             .jobs
             .get(name)
             .expect("job progress must be registered")
     }
 
-    pub fn finish_section_success(&self, section: SectionProgress) {
+    pub fn finish_section_success(&self, section: &SectionProgress) {
         self.finish_section(section, true);
     }
 
-    pub fn finish_section_failure(&self, section: SectionProgress) {
+    pub fn finish_section_failure(&self, section: &SectionProgress) {
         self.finish_section(section, false);
     }
 
     pub fn print_summary(&self, message: &str) {
         self.add_section_separator();
         let message = format!("{} {}", success_marker(), phase_heading(message));
-        if self.is_interactive {
-            let progress = self.progress.add(ProgressBar::new_spinner());
-            progress.set_style(completed_style());
-            progress.finish_with_message(message);
-            self.retain_progress(progress);
-        } else {
-            eprintln!("{message}");
-        }
+        eprintln!("{message}");
     }
 
     fn new_section_spinner(&self, message: impl Into<String>) -> ProgressBar {
@@ -139,17 +144,22 @@ impl Ui {
         progress
     }
 
-    fn finish_job(&self, progress: &ProgressBar, message: String) {
-        if self.is_interactive {
-            progress.set_style(completed_style());
-            progress.finish_with_message(message);
+    fn finish_job(&self, progress: &JobProgress, message: String) {
+        *progress
+            .result
+            .lock()
+            .expect("job result mutex is not poisoned") = Some(message.clone());
+
+        if self.uses_live_progress {
+            progress.progress.set_style(completed_style());
+            progress.progress.finish_with_message(message);
         } else {
             eprintln!("{message}");
-            progress.finish_and_clear();
+            progress.progress.finish_and_clear();
         }
     }
 
-    fn finish_section(&self, section: SectionProgress, is_success: bool) {
+    fn finish_section(&self, section: &SectionProgress, is_success: bool) {
         let message = if is_success {
             format!("{} {}", success_marker(), section.name)
         } else {
@@ -158,21 +168,38 @@ impl Ui {
 
         if !is_success {
             for progress in section.jobs.values() {
-                if !progress.is_finished() {
-                    progress.finish_and_clear();
+                if !progress.progress.is_finished() {
+                    progress.progress.finish_and_clear();
                 }
             }
         }
 
-        if self.is_interactive {
-            section.progress.set_style(completed_style());
-            section.progress.finish_with_message(message);
+        if self.uses_live_progress {
+            section.progress.finish_and_clear();
+            self.progress
+                .clear()
+                .expect("clearing completed progress must succeed");
+            eprintln!("{message}");
+            for name in &section.job_order {
+                let progress = &section.jobs[name];
+                if let Some(result) = progress
+                    .result
+                    .lock()
+                    .expect("job result mutex is not poisoned")
+                    .as_deref()
+                {
+                    eprintln!("{result}");
+                }
+            }
         } else {
             eprintln!("{message}");
             section.progress.finish_and_clear();
         }
 
-        self.retain(section);
+        self.progress.remove(&section.progress);
+        for progress in section.jobs.values() {
+            self.progress.remove(&progress.progress);
+        }
         *self
             .needs_section_separator
             .lock()
@@ -190,30 +217,7 @@ impl Ui {
         *needs_separator = false;
         drop(needs_separator);
 
-        if self.is_interactive {
-            let separator = self.progress.add(ProgressBar::new_spinner());
-            separator.set_style(completed_style());
-            separator.finish_with_message(" ".to_owned());
-            self.retain_progress(separator);
-        } else {
-            eprintln!();
-        }
-    }
-
-    fn retain(&self, section: SectionProgress) {
-        let mut retained = self
-            .retained_progress
-            .lock()
-            .expect("progress retention mutex is not poisoned");
-        retained.push(section.progress);
-        retained.extend(section.jobs.into_values());
-    }
-
-    fn retain_progress(&self, progress: ProgressBar) {
-        self.retained_progress
-            .lock()
-            .expect("progress retention mutex is not poisoned")
-            .push(progress);
+        eprintln!();
     }
 }
 
