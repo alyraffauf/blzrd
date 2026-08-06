@@ -44,7 +44,7 @@ impl Ui {
 
         SectionProgress {
             name: heading.clone(),
-            progress: self.new_spinner(heading, true),
+            progress: self.new_section_spinner(heading),
             jobs: HashMap::new(),
         }
     }
@@ -54,8 +54,7 @@ impl Ui {
             return;
         }
 
-        let progress = self.new_spinner(display_name, false);
-        progress.set_style(job_spinner_style());
+        let progress = self.new_job_spinner(display_name);
         section.jobs.insert(name.to_owned(), progress);
     }
 
@@ -116,9 +115,22 @@ impl Ui {
         }
     }
 
-    fn new_spinner(&self, message: impl Into<String>, should_animate: bool) -> ProgressBar {
+    fn new_section_spinner(&self, message: impl Into<String>) -> ProgressBar {
+        self.new_spinner(message, spinner_style(), true)
+    }
+
+    fn new_job_spinner(&self, message: impl Into<String>) -> ProgressBar {
+        self.new_spinner(message, job_spinner_style(), false)
+    }
+
+    fn new_spinner(
+        &self,
+        message: impl Into<String>,
+        style: ProgressStyle,
+        should_animate: bool,
+    ) -> ProgressBar {
         let progress = self.progress.add(ProgressBar::new_spinner());
-        progress.set_style(spinner_style());
+        progress.set_style(style);
         progress.set_message(message.into());
         progress.tick();
         if should_animate {
