@@ -34,7 +34,7 @@ impl Ui {
 
     pub fn print_nodes(&self, jobs: &HashMap<String, JobSpec>) {
         let mut nodes: Vec<_> = jobs.iter().collect();
-        nodes.sort_by(|(left_name, _), (right_name, _)| left_name.cmp(right_name));
+        nodes.sort_by_key(|(name, _)| *name);
 
         for (name, spec) in nodes {
             eprintln!("{name} · {} · {}", spec.system, spec.target());
