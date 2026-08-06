@@ -32,7 +32,7 @@ impl Ui {
         }
     }
 
-    pub fn print_nodes(&self, jobs: &HashMap<String, JobSpec>) {
+    pub fn print_nodes(jobs: &HashMap<String, JobSpec>) {
         let mut nodes: Vec<_> = jobs.iter().collect();
         nodes.sort_by_key(|(name, _)| *name);
 
@@ -41,7 +41,7 @@ impl Ui {
         }
     }
 
-    pub fn print_warning(&self, message: impl Display) {
+    pub fn print_warning(message: impl Display) {
         eprintln!("{}", warning(format!("! {message}")));
     }
 
@@ -91,20 +91,19 @@ impl Ui {
         progress
     }
 
-    pub fn finish_job_success(&self, progress: ProgressBar, name: &str) {
+    pub fn finish_job_success(&self, progress: &ProgressBar, name: &str) {
         self.finish_job(progress, format!("  {} {name}", success_marker()));
     }
 
-    pub fn finish_job_failure(&self, progress: ProgressBar, name: &str, error: impl Display) {
+    pub fn finish_job_failure(&self, progress: &ProgressBar, name: &str, error: impl Display) {
         self.finish_job(progress, format!("  {} {name}: {error}", failure_marker()));
     }
 
-    pub fn job_progress(&self, section: &SectionProgress, name: &str) -> ProgressBar {
+    pub fn job_progress<'a>(section: &'a SectionProgress, name: &str) -> &'a ProgressBar {
         section
             .jobs
             .get(name)
             .expect("job progress must be registered")
-            .clone()
     }
 
     pub fn finish_section_success(&self, section: SectionProgress) {
@@ -143,7 +142,7 @@ impl Ui {
         progress
     }
 
-    fn finish_job(&self, progress: ProgressBar, message: String) {
+    fn finish_job(&self, progress: &ProgressBar, message: String) {
         if self.is_interactive {
             progress.set_style(completed_style());
             progress.finish_with_message(message);

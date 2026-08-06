@@ -19,7 +19,7 @@ pub async fn run_deploy(
 ) -> anyhow::Result<()> {
     let (jobs, unknown_skips) = filter_jobs(jobs, &common)?;
     for name in unknown_skips {
-        ui.print_warning(format!("ignoring unknown node '{name}' in --skip"));
+        Ui::print_warning(format!("ignoring unknown node '{name}' in --skip"));
     }
 
     op::validate(&jobs, operation)?;
@@ -88,11 +88,11 @@ async fn build_closures(
         let result = nix::build_closure(&jobs[&name], &common.build_host, host_key_policy).await;
         match result {
             Ok(closure) => {
-                ui.finish_job_success(job_progress, &name);
+                ui.finish_job_success(&job_progress, &name);
                 closures.insert(name, closure);
             }
             Err(error) => {
-                ui.finish_job_failure(job_progress, &name, &error);
+                ui.finish_job_failure(&job_progress, &name, &error);
                 ui.finish_section_failure(progress);
                 return Err(error).context(format!("building {name}"));
             }
@@ -126,8 +126,8 @@ async fn deploy_closures(
                 let job_progress = ui.start_job(deployment_section, &name, &label);
                 let result = nix::deploy_closure(&spec, &closure, operation, host_key_policy).await;
                 match &result {
-                    Ok(()) => ui.finish_job_success(job_progress, &label),
-                    Err(error) => ui.finish_job_failure(job_progress, &label, error),
+                    Ok(()) => ui.finish_job_success(&job_progress, &label),
+                    Err(error) => ui.finish_job_failure(&job_progress, &label, error),
                 }
                 result
             }

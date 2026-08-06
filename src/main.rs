@@ -9,6 +9,7 @@ mod workflow;
 
 use crate::cli::Command;
 use crate::nix::EvaluationProgress;
+use crate::ui::Ui;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -30,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
             ui.start_job(&evaluation, &name, &name);
         }
         EvaluationProgress::MetadataResolved { name } => {
-            ui.finish_job_success(ui.job_progress(&evaluation, &name), &name);
+            ui.finish_job_success(Ui::job_progress(&evaluation, &name), &name);
         }
     })
     .await;
@@ -48,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command {
         Command::List => {
-            ui.print_nodes(&jobs);
+            Ui::print_nodes(&jobs);
             return Ok(());
         }
         cmd @ (Command::Switch(_) | Command::Boot(_)) => {
