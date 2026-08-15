@@ -10,33 +10,21 @@ use crate::process::{run_json, run_json_lines};
 const NODE_METADATA_PROJECTION: &str =
     "node: { hostname = node.hostname or \"\"; user = node.user or \"\"; type = node.type or \"\"; }";
 
-#[derive(Debug, Clone)]
-pub enum EvaluationProgress {
-    JobEvaluated { name: String },
-    MetadataResolved { name: String },
-}
-
 /// Evaluate the flake's `blzrd.nodes` and return enriched `JobSpec`s.
-pub async fn eval_deployments<OnProgress>(
+pub async fn eval_deployments<OnJobCompleted>(
     cfg: &str,
-    mut on_progress: OnProgress,
+    mut on_job_completed: OnJobCompleted,
 ) -> Result<HashMap<String, JobSpec>>
 where
-    OnProgress: FnMut(EvaluationProgress),
+    OnJobCompleted: FnMut(String),
 {
-    let results = run_eval_jobs(cfg, &mut on_progress).await?;
+    let results = run_eval_jobs(cfg).await?;
     let basics = collect_basics(&results)?;
-    build_job_specs(cfg, &results, &basics, &mut on_progress).await
+    build_job_specs(cfg, &results, &basics, &mut on_job_completed).await
 }
 
 /// Run `nix-eval-jobs` on the flake's `blzrd.nodes`.
-async fn run_eval_jobs<OnProgress>(
-    cfg: &str,
-    on_progress: &mut OnProgress,
-) -> Result<Vec<NixEvalJobsResult>>
-where
-    OnProgress: FnMut(EvaluationProgress),
-{
+async fn run_eval_jobs(cfg: &str) -> Result<Vec<NixEvalJobsResult>> {
     let flake_reference = format!("{cfg}#blzrd.nodes");
     let gc_roots_dir = gc_roots_dir()?;
 
@@ -49,15 +37,7 @@ where
             "--flake",
             &flake_reference,
         ],
-        |result: &NixEvalJobsResult| {
-            let name = result
-                .attr_path
-                .as_ref()
-                .and_then(|path| path.first())
-                .cloned()
-                .unwrap_or_else(|| result.attr.clone());
-            on_progress(EvaluationProgress::JobEvaluated { name });
-        },
+        |_: &NixEvalJobsResult| {},
     )
     .await
 }
@@ -120,7 +100,7 @@ async fn build_job_specs(
     cfg: &str,
     results: &[NixEvalJobsResult],
     basics: &HashMap<String, (String, String)>,
-    on_progress: &mut impl FnMut(EvaluationProgress),
+    on_job_completed: &mut impl FnMut(String),
 ) -> Result<HashMap<String, JobSpec>> {
     let mut jobs = HashMap::with_capacity(basics.len());
     let mut names: Vec<_> = basics.keys().cloned().collect();
@@ -149,7 +129,7 @@ async fn build_job_specs(
                 drv_path,
             },
         );
-        on_progress(EvaluationProgress::MetadataResolved { name });
+        on_job_completed(name);
     }
 
     Ok(jobs)

@@ -85,30 +85,26 @@ async fn build_closures(
     host_key_policy: HostKeyPolicy,
     ui: &Ui,
 ) -> anyhow::Result<HashMap<String, String>> {
-    let mut progress = ui.start_section("Building");
+    ui.start_section("Building");
     let names = sorted_job_names(jobs);
-    for name in &names {
-        ui.add_job(&mut progress, name, name);
-    }
 
     let mut closures = HashMap::with_capacity(jobs.len());
     for name in names {
-        let job_progress = ui.start_job(&progress, &name, &name);
         let result = nix::build_closure(&jobs[&name], &common.build_host, host_key_policy).await;
         match result {
             Ok(closure) => {
-                ui.finish_job_success(&job_progress, &name);
+                ui.finish_job_success(&name);
                 closures.insert(name, closure);
             }
             Err(error) => {
-                ui.finish_job_failure(&job_progress, &name, &error);
-                ui.finish_section_failure(progress);
+                ui.finish_job_failure(&name, &error);
+                ui.finish_section_failure();
                 return Err(error).context(format!("building {name}"));
             }
         }
     }
 
-    ui.finish_section_success(progress);
+    ui.finish_section_success();
     Ok(closures)
 }
 
@@ -120,23 +116,18 @@ async fn deploy_closures(
     host_key_policy: HostKeyPolicy,
     ui: &Ui,
 ) -> anyhow::Result<()> {
-    let mut progress = ui.start_section("Deploying");
+    ui.start_section("Deploying");
     let jobs = sorted_jobs(jobs);
-    for (name, spec) in &jobs {
-        ui.add_job(&mut progress, name, &deployment_label(name, spec));
-    }
 
-    let deployment_section = &progress;
     let results = stream::iter(jobs)
         .map(|(name, spec)| {
             let closure = closures[&name].clone();
             async move {
                 let label = deployment_label(&name, &spec);
-                let job_progress = ui.start_job(deployment_section, &name, &label);
                 let result = nix::deploy_closure(&spec, &closure, operation, host_key_policy).await;
                 match &result {
-                    Ok(()) => ui.finish_job_success(&job_progress, &label),
-                    Err(error) => ui.finish_job_failure(&job_progress, &label, error),
+                    Ok(()) => ui.finish_job_success(&label),
+                    Err(error) => ui.finish_job_failure(&label, error),
                 }
                 result
             }
@@ -146,12 +137,11 @@ async fn deploy_closures(
         .await;
 
     if results.iter().any(Result::is_err) {
-        ui.finish_section_failure(progress);
+        ui.finish_section_failure();
         anyhow::bail!("deployment failed");
     }
 
-    ui.finish_section_success(progress);
-    ui.print_summary("Deployment complete");
+    ui.finish_section_success();
     Ok(())
 }
 
