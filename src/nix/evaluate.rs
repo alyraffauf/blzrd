@@ -2,31 +2,30 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
 
-use crate::models::{JobSpec, NixEvalJobsResult, SystemType};
-use crate::process::{run_json, run_json_lines};
+use crate::models::{JobSpec, NixEvalJobsResult, NodeMetadata, SystemType};
+use crate::process::run_json_lines;
 
-const NODE_METADATA_PROJECTION: &str =
-    "node: { hostname = node.hostname or \"\"; user = node.user or \"\"; type = node.type or \"\"; }";
+const SELECT_METADATA: &str = "output: output.blzrdMetadata";
 
 /// Evaluate the flake's `blzrd.nodes` and return enriched `JobSpec`s.
 pub async fn eval_deployments<OnJobCompleted>(
     cfg: &str,
+    selected_nodes: &[String],
     mut on_job_completed: OnJobCompleted,
 ) -> Result<HashMap<String, JobSpec>>
 where
     OnJobCompleted: FnMut(String),
 {
-    let results = run_eval_jobs(cfg).await?;
-    let basics = collect_basics(&results)?;
-    build_job_specs(cfg, &results, &basics, &mut on_job_completed).await
+    let results = run_eval_jobs(cfg, selected_nodes).await?;
+    collect_job_specs(&results, &mut on_job_completed)
 }
 
 /// Run `nix-eval-jobs` on the flake's `blzrd.nodes`.
-async fn run_eval_jobs(cfg: &str) -> Result<Vec<NixEvalJobsResult>> {
+async fn run_eval_jobs(cfg: &str, selected_nodes: &[String]) -> Result<Vec<NixEvalJobsResult>> {
     let flake_reference = format!("{cfg}#blzrd.nodes");
     let gc_roots_dir = gc_roots_dir()?;
+    let deployment_selector = deployment_selector(selected_nodes);
 
     run_json_lines(
         "nix-eval-jobs",
@@ -36,10 +35,47 @@ async fn run_eval_jobs(cfg: &str) -> Result<Vec<NixEvalJobsResult>> {
             "--force-recurse",
             "--flake",
             &flake_reference,
+            "--select",
+            &deployment_selector,
+            "--apply",
+            SELECT_METADATA,
         ],
         |_: &NixEvalJobsResult| {},
     )
     .await
+}
+
+fn deployment_selector(selected_nodes: &[String]) -> String {
+    let serialized_node_names = selected_nodes
+        .iter()
+        .map(|name| serde_json::to_string(name).expect("node names must serialize as JSON"))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!(
+        r#"
+nodes:
+let
+  selectedNames = [ {serialized_node_names} ];
+  requestedNodes = builtins.listToAttrs (
+    map (name: {{ inherit name; value = null; }}) selectedNames
+  );
+  nodesToDeploy =
+    if selectedNames == [ ]
+    then nodes
+    else builtins.intersectAttrs requestedNodes nodes;
+in
+builtins.mapAttrs (_: node:
+  node.output // {{
+    blzrdMetadata = {{
+      hostname = node.hostname or null;
+      type = node.type or "";
+      user = node.user or "";
+    }};
+  }}
+) nodesToDeploy
+"#
+    )
 }
 
 fn gc_roots_dir() -> Result<PathBuf> {
@@ -59,10 +95,15 @@ fn gc_roots_dir() -> Result<PathBuf> {
     Ok(gc_roots_dir)
 }
 
-/// First pass: extract the basic `(output, drv_path)` pair for each job.
-fn collect_basics(results: &[NixEvalJobsResult]) -> Result<HashMap<String, (String, String)>> {
-    let mut basics = HashMap::with_capacity(results.len());
-    for result in results {
+fn collect_job_specs(
+    results: &[NixEvalJobsResult],
+    on_job_completed: &mut impl FnMut(String),
+) -> Result<HashMap<String, JobSpec>> {
+    let mut sorted_results: Vec<_> = results.iter().collect();
+    sorted_results.sort_by(|left, right| left.attr.cmp(&right.attr));
+
+    let mut jobs = HashMap::with_capacity(results.len());
+    for result in sorted_results {
         if let Some(error) = &result.error {
             anyhow::bail!("job {}: {error}", result.attr);
         }
@@ -71,51 +112,25 @@ fn collect_basics(results: &[NixEvalJobsResult]) -> Result<HashMap<String, (Stri
             .attr_path
             .as_ref()
             .with_context(|| format!("job {}: missing attr_path", result.attr))?;
-        if attr_path.len() < 2 {
+        if attr_path.len() != 1 {
             anyhow::bail!("job {}: malformed attr_path: {attr_path:?}", result.attr);
         }
-        let job_name = attr_path[0].clone();
+        let name = attr_path[0].clone();
 
         let outputs = result
             .outputs
             .as_ref()
-            .with_context(|| format!("job {job_name}: missing outputs"))?;
-        let output_path = outputs
+            .with_context(|| format!("job {name}: missing outputs"))?;
+        outputs
             .get("out")
-            .with_context(|| format!("job {job_name}: missing 'out' output"))?;
+            .with_context(|| format!("job {name}: missing 'out' output"))?;
 
-        basics.insert(
-            job_name,
-            (
-                output_path.clone(),
-                result.drv_path.clone().unwrap_or_default(),
-            ),
-        );
-    }
-    Ok(basics)
-}
-
-/// Second pass: enrich each job's basic data with hostname, user, and system type.
-async fn build_job_specs(
-    cfg: &str,
-    results: &[NixEvalJobsResult],
-    basics: &HashMap<String, (String, String)>,
-    on_job_completed: &mut impl FnMut(String),
-) -> Result<HashMap<String, JobSpec>> {
-    let mut jobs = HashMap::with_capacity(basics.len());
-    let mut names: Vec<_> = basics.keys().cloned().collect();
-    names.sort();
-
-    for name in names {
-        let (output, drv_path) = basics.get(&name).cloned().unwrap_or_default();
-        let metadata = node_metadata(cfg, &name).await;
+        let metadata = result.extra_value.clone().unwrap_or_default();
         let hostname = metadata.hostname_or_name(&name);
         let user = metadata.user();
-        let system = metadata.system_type(&name, results)?;
+        let system = metadata.system_type(&name, result.system.as_deref())?;
+        let drv_path = result.drv_path.clone().unwrap_or_default();
 
-        if output.is_empty() {
-            anyhow::bail!("job {name}: missing output path");
-        }
         if user.is_empty() {
             anyhow::bail!("job {name}: missing user");
         }
@@ -135,35 +150,8 @@ async fn build_job_specs(
     Ok(jobs)
 }
 
-async fn node_metadata(cfg: &str, name: &str) -> NodeMetadata {
-    let node_reference = format!("{cfg}#blzrd.nodes.{name}");
-    run_json(
-        "nix",
-        &[
-            "eval",
-            "--json",
-            "--apply",
-            NODE_METADATA_PROJECTION,
-            &node_reference,
-        ],
-    )
-    .await
-    .unwrap_or_default()
-}
-
-fn infer_system_type(name: &str, results: &[NixEvalJobsResult]) -> Result<String> {
-    let system = results
-        .iter()
-        .find(|result| {
-            result
-                .attr_path
-                .as_deref()
-                .and_then(|path| path.first())
-                .is_some_and(|job_name| job_name == name)
-        })
-        .and_then(|result| result.system.as_deref())
-        .unwrap_or_default();
-
+fn infer_system_type(name: &str, system: Option<&str>) -> Result<String> {
+    let system = system.unwrap_or_default();
     if system.contains("darwin") {
         Ok("darwin".to_string())
     } else if system.contains("linux") {
@@ -171,14 +159,6 @@ fn infer_system_type(name: &str, results: &[NixEvalJobsResult]) -> Result<String
     } else {
         anyhow::bail!("job {name}: unknown system type: {system}");
     }
-}
-
-#[derive(Default, Deserialize)]
-struct NodeMetadata {
-    hostname: Option<String>,
-    user: Option<String>,
-    #[serde(rename = "type")]
-    type_name: Option<String>,
 }
 
 impl NodeMetadata {
@@ -194,7 +174,7 @@ impl NodeMetadata {
         self.user.clone().unwrap_or_default()
     }
 
-    fn system_type(&self, name: &str, results: &[NixEvalJobsResult]) -> Result<SystemType> {
+    fn system_type(&self, name: &str, system: Option<&str>) -> Result<SystemType> {
         let configured_type = self
             .type_name
             .as_deref()
@@ -202,7 +182,7 @@ impl NodeMetadata {
             .map(str::to_owned);
         let type_name = match configured_type {
             Some(type_name) => type_name,
-            None => infer_system_type(name, results)?,
+            None => infer_system_type(name, system)?,
         };
 
         SystemType::parse(&type_name).map_err(|error| anyhow::anyhow!("job {name}: {error}"))
@@ -212,6 +192,43 @@ impl NodeMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deployment_selector_quotes_selected_node_names() {
+        let selector = deployment_selector(&["mauville".to_string(), "quoted\"node".to_string()]);
+
+        assert!(selector.contains(r#"selectedNames = [ "mauville" "quoted\"node" ];"#));
+    }
+
+    #[test]
+    fn collect_job_specs_uses_embedded_metadata() {
+        let results = [NixEvalJobsResult {
+            attr: "mauville".to_string(),
+            attr_path: Some(vec!["mauville".to_string()]),
+            drv_path: Some("/nix/store/mauville.drv".to_string()),
+            error: None,
+            extra_value: Some(NodeMetadata {
+                hostname: None,
+                type_name: Some("nixos".to_string()),
+                user: Some("root".to_string()),
+            }),
+            outputs: Some(HashMap::from([(
+                "out".to_string(),
+                "/nix/store/mauville".to_string(),
+            )])),
+            system: Some("x86_64-linux".to_string()),
+        }];
+        let mut completed = Vec::new();
+
+        let jobs = collect_job_specs(&results, &mut |name| completed.push(name)).unwrap();
+        let mauville = &jobs["mauville"];
+
+        assert_eq!(completed, ["mauville"]);
+        assert_eq!(mauville.hostname, "mauville");
+        assert_eq!(mauville.system, SystemType::Nixos);
+        assert_eq!(mauville.user, "root");
+        assert_eq!(mauville.drv_path, "/nix/store/mauville.drv");
+    }
 
     #[test]
     fn node_metadata_accepts_a_null_hostname() {

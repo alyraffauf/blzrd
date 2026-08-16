@@ -5,7 +5,6 @@
 }: let
   cfg = config.blzrd;
   blzrdLib = import ./lib.nix {inherit lib;};
-  validatedNodes = blzrdLib.assertValidNodes cfg.nodes;
 in {
   options.blzrd = {
     nodes = lib.mkOption {
@@ -48,7 +47,7 @@ in {
   };
 
   config = {
-    flake.blzrd.nodes = validatedNodes;
+    flake.blzrd.nodes = cfg.nodes;
 
     perSystem = {pkgs, ...}:
       lib.mkIf cfg.checks.enable {

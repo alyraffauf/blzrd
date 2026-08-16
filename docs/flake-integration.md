@@ -34,7 +34,10 @@ configuration:
 ```
 
 The module exposes `blzrd.nodes` as a flake output and adds
-`checks.<system>.blzrd-nodes`. The check is enabled by default. To disable it:
+`checks.<system>.blzrd-nodes`. The public node output stays lazy, so listing
+nodes or reading deployment metadata does not evaluate their system
+derivations. The check is enabled by default and performs full validation. To
+disable it:
 
 ```nix
 blzrd.checks.enable = false;

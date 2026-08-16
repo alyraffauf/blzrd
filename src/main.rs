@@ -19,9 +19,13 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let ui = ui::Ui::new();
+    let (op, common) = args.command.into_deploy();
 
     ui.start_section("Evaluating");
-    let eval_result = nix::eval_deployments(&args.flake, |name| ui.finish_job_success(&name)).await;
+    let eval_result = nix::eval_deployments(&args.flake, &common.nodes, |name| {
+        ui.finish_job_success(&name)
+    })
+    .await;
 
     let jobs = match eval_result {
         Ok(result) => {
@@ -35,7 +39,6 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    let (op, common) = args.command.into_deploy();
     match workflow::run_deploy(op, common, jobs, &ui).await {
         Ok(()) => ui.finalize_success(),
         Err(error) => {

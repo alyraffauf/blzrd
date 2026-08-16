@@ -56,6 +56,15 @@ pub struct NixEvalJobsResult {
     pub attr_path: Option<Vec<String>>,
     pub drv_path: Option<String>,
     pub error: Option<String>,
+    pub extra_value: Option<NodeMetadata>,
     pub outputs: Option<HashMap<String, String>>,
     pub system: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct NodeMetadata {
+    pub hostname: Option<String>,
+    pub user: Option<String>,
+    #[serde(rename = "type")]
+    pub type_name: Option<String>,
 }

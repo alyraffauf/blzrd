@@ -1,13 +1,13 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
 use crate::models::{BuildResult, JobSpec, SystemType};
 use crate::op::Operation;
 use crate::process::{run_json, run_json_with_env, run_with_env};
-use crate::ssh::{run as run_ssh, HostKeyPolicy};
+use crate::ssh::{HostKeyPolicy, run as run_ssh};
 
 /// Build a job's derivation and return the `out` store path.
 pub async fn build_closure(
