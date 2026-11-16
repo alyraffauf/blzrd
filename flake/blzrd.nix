@@ -27,8 +27,8 @@ in {
 
           type = lib.mkOption {
             default = null;
-            description = "The activation backend, either nixos or darwin.";
-            type = lib.types.nullOr (lib.types.enum ["darwin" "nixos"]);
+            description = "The activation backend: nixos, darwin, or system-manager. System-manager must be specified explicitly.";
+            type = lib.types.nullOr (lib.types.enum ["darwin" "nixos" "system-manager"]);
           };
 
           user = lib.mkOption {

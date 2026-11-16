@@ -20,8 +20,11 @@ impl fmt::Display for Operation {
 
 pub fn validate(jobs: &HashMap<String, JobSpec>, op: Operation) -> anyhow::Result<()> {
     for (name, spec) in jobs {
-        if matches!((spec.system, op), (SystemType::Darwin, Operation::Boot)) {
-            anyhow::bail!("job {name}: 'boot' is not a valid darwin operation");
+        if op == Operation::Boot && spec.system != SystemType::Nixos {
+            anyhow::bail!(
+                "job {name}: 'boot' is not a valid {} operation",
+                spec.system
+            );
         }
     }
 
@@ -55,6 +58,13 @@ mod tests {
     fn validate_darwin_boot_errors() {
         let mut jobs = HashMap::new();
         jobs.insert("mac".into(), job(SystemType::Darwin));
+        assert!(validate(&jobs, Operation::Boot).is_err());
+    }
+
+    #[test]
+    fn system_manager_supports_switch_but_rejects_boot() {
+        let jobs = HashMap::from([("server".into(), job(SystemType::SystemManager))]);
+        validate(&jobs, Operation::Switch).unwrap();
         assert!(validate(&jobs, Operation::Boot).is_err());
     }
 

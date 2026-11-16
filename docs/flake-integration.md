@@ -88,4 +88,6 @@ The library provides three functions:
 
 Each node must provide a derivation-valued `output` and a non-empty `user`.
 `hostname` is optional and may be null; `type` is optional and may be null,
-`"nixos"`, or `"darwin"`.
+`"nixos"`, `"darwin"`, or `"system-manager"`. System-manager nodes must set
+their type explicitly and use the derivation returned by `makeSystemConfig`
+as their output. They support `switch` only.

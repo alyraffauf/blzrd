@@ -6,6 +6,7 @@ use std::fmt;
 pub enum SystemType {
     Nixos,
     Darwin,
+    SystemManager,
 }
 
 impl SystemType {
@@ -13,6 +14,7 @@ impl SystemType {
         match s {
             "nixos" => Ok(SystemType::Nixos),
             "darwin" => Ok(SystemType::Darwin),
+            "system-manager" => Ok(SystemType::SystemManager),
             other => Err(format!("unsupported system type: {other}")),
         }
     }
@@ -23,6 +25,7 @@ impl fmt::Display for SystemType {
         match self {
             SystemType::Nixos => write!(f, "nixos"),
             SystemType::Darwin => write!(f, "darwin"),
+            SystemType::SystemManager => write!(f, "system-manager"),
         }
     }
 }

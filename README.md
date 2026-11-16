@@ -1,6 +1,6 @@
 # blzrd
 
-A blazing fast deployment tool for distributed NixOS and Darwin fleets. Useful for quickly and efficiently deploying the same flake revision to multiple machines in parallel.
+A blazing fast deployment tool for distributed NixOS, Darwin, and system-manager fleets. Useful for quickly and efficiently deploying the same flake revision to multiple machines in parallel.
 
 A Rust port and continuance of [`nynx`](https://github.com/alyraffauf/nynx).
 
@@ -21,7 +21,7 @@ blzrd switch --flake <flake-url>
 ### Commands
 
 - `switch`: Activate the new configuration and make it the boot default.
-- `boot`: Set the new configuration as the boot default without activating.
+- `boot`: Set the new configuration as the boot default without activating. NixOS only.
 
 ### Options
 
@@ -67,6 +67,12 @@ The deployment user must be specified. Non-root users require passwordless `sudo
       user = "aly";
       type = "darwin";
     };
+
+    webserver = {
+      output = self.systemConfigs.webserver;
+      user = "deploy";
+      type = "system-manager";
+    };
   };
 }
 ```
@@ -75,6 +81,22 @@ The deployment user must be specified. Non-root users require passwordless `sudo
 
 For module and library integration, see
 [the flake integration guide](docs/flake-integration.md).
+
+### System-manager
+
+Set `type = "system-manager"` explicitly; Linux outputs otherwise default to
+NixOS. Use the derivation returned by system-manager's `lib.makeSystemConfig`
+as the node's `output`.
+
+`switch` runs the output's `bin/register-profile`, then runs `bin/activate`
+in a transient systemd unit and waits for its result. Registration manages
+system-manager's own profile and GC root. `boot` is not supported.
+
+Targets need a system-manager-supported Linux system with systemd and Nix.
+`systemd-run` must be available to root or through sudo, and `systemctl` must
+be on the SSH user's PATH. The deployment user needs root access or
+passwordless sudo, plus Nix daemon permission to import the copied closures.
+No separately installed system-manager CLI is required.
 
 ## Limitations
 

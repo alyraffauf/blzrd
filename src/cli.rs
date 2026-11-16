@@ -2,7 +2,7 @@ use clap::{Args, Parser, Subcommand};
 
 use crate::op::Operation;
 
-/// Blazing fast fleet deployments for NixOS and nix-darwin.
+/// Blazing fast fleet deployments for NixOS, nix-darwin, and system-manager.
 #[derive(Parser, Debug)]
 #[command(name = "blzrd", author, version, about)]
 pub struct Cli {

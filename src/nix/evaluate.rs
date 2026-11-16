@@ -194,6 +194,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn system_manager_requires_explicit_backend_on_linux() {
+        let metadata = NodeMetadata {
+            type_name: Some("system-manager".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            metadata
+                .system_type("server", Some("x86_64-linux"))
+                .unwrap(),
+            SystemType::SystemManager
+        );
+        assert_eq!(SystemType::SystemManager.to_string(), "system-manager");
+        assert_eq!(
+            NodeMetadata::default()
+                .system_type("server", Some("x86_64-linux"))
+                .unwrap(),
+            SystemType::Nixos
+        );
+    }
+
+    #[test]
     fn deployment_selector_quotes_selected_node_names() {
         let selector = deployment_selector(&["mauville".to_string(), "quoted\"node".to_string()]);
 

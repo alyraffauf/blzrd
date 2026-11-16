@@ -22,8 +22,8 @@
         "node '${name}': hostname must be null or a non-empty string")
       ++ (lib.optional
         (!(builtins.isNull type
-          || (builtins.isString type && lib.elem type ["darwin" "nixos"])))
-        "node '${name}': type must be null, darwin, or nixos");
+          || (builtins.isString type && lib.elem type ["darwin" "nixos" "system-manager"])))
+        "node '${name}': type must be null, darwin, nixos, or system-manager");
 
   validateNodes = nodes:
     if !builtins.isAttrs nodes

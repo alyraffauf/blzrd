@@ -93,7 +93,10 @@ pub async fn deploy_closure(
 
     if matches!(
         (spec.system, operation),
-        (SystemType::Nixos, Operation::Switch)
+        (
+            SystemType::Nixos | SystemType::SystemManager,
+            Operation::Switch
+        )
     ) {
         poll_activation(&target, &activation_unit, host_key_policy)
             .await
@@ -150,6 +153,34 @@ fn activation_commands(
     operation: Operation,
     activation_unit: &str,
 ) -> Result<Vec<RemoteCommand>> {
+    if spec.system == SystemType::SystemManager {
+        if operation == Operation::Boot {
+            anyhow::bail!(
+                "job {}: 'boot' is not a valid system-manager operation",
+                spec.hostname
+            );
+        }
+        return Ok(vec![
+            root_command(
+                spec,
+                &format!("{output_path}/bin/register-profile"),
+                Vec::new(),
+            ),
+            root_command(
+                spec,
+                "systemd-run",
+                vec![
+                    "--unit".to_owned(),
+                    activation_unit.to_owned(),
+                    "--remain-after-exit".to_owned(),
+                    "--no-block".to_owned(),
+                    "--".to_owned(),
+                    format!("{output_path}/bin/activate"),
+                ],
+            ),
+        ]);
+    }
+
     let update_profile = root_command(
         spec,
         "/run/current-system/sw/bin/nix-env",
@@ -162,6 +193,7 @@ fn activation_commands(
     );
 
     let activate = match (spec.system, operation) {
+        (SystemType::SystemManager, _) => unreachable!("system-manager handled above"),
         (SystemType::Darwin, Operation::Switch) => {
             root_command(spec, &format!("{output_path}/activate"), Vec::new())
         }
@@ -215,7 +247,7 @@ async fn poll_activation(target: &str, unit: &str, host_key_policy: HostKeyPolic
             (Some("exited"), 0) => break,
             (Some("exited"), status) => {
                 anyhow::bail!(
-                    "activation on {target}: switch-to-configuration exited with code {status}"
+                    "activation on {target}: activation command exited with code {status}"
                 );
             }
             (Some("failed"), _) => {
@@ -299,6 +331,45 @@ mod tests {
 
         assert_eq!(command.program, "activate");
         assert_eq!(command.arguments, ["switch"]);
+    }
+
+    #[test]
+    fn system_manager_registers_before_detached_activation() {
+        for user in ["root", "deploy"] {
+            let mut spec = job(user);
+            spec.system = SystemType::SystemManager;
+            let commands =
+                activation_commands(&spec, "/nix/store/profile", Operation::Switch, "test-unit")
+                    .unwrap();
+            let expected = [
+                vec!["/nix/store/profile/bin/register-profile"],
+                vec![
+                    "systemd-run",
+                    "--unit",
+                    "test-unit",
+                    "--remain-after-exit",
+                    "--no-block",
+                    "--",
+                    "/nix/store/profile/bin/activate",
+                ],
+            ];
+            assert_eq!(commands.len(), expected.len());
+            for (command, expected) in commands.iter().zip(expected) {
+                let actual: Vec<_> = std::iter::once(command.program.as_str())
+                    .chain(command.arguments.iter().map(String::as_str))
+                    .collect();
+                let expected: Vec<_> = if user == "root" {
+                    expected
+                } else {
+                    [vec!["sudo", "-n"], expected].concat()
+                };
+                assert_eq!(actual, expected);
+            }
+            assert!(
+                activation_commands(&spec, "/nix/store/profile", Operation::Boot, "test-unit")
+                    .is_err()
+            );
+        }
     }
 
     #[test]
