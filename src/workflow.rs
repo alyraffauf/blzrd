@@ -124,10 +124,14 @@ async fn deploy_closures(
             let closure = closures[&name].clone();
             async move {
                 let label = deployment_label(&name, &spec);
-                let result = nix::deploy_closure(&spec, &closure, operation, host_key_policy).await;
+                let result =
+                    nix::deploy_closure(&spec, &closure, operation, host_key_policy, |message| {
+                        ui.report_job_progress(&label, message);
+                    })
+                    .await;
                 match &result {
                     Ok(()) => ui.finish_job_success(&label),
-                    Err(error) => ui.finish_job_failure(&label, error),
+                    Err(error) => ui.finish_job_failure(&label, format_args!("{error:#}")),
                 }
                 result
             }

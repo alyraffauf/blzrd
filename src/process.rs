@@ -36,6 +36,52 @@ pub async fn run_with_env(cmd: &str, args: &[&str], envs: &[(&str, &str)]) -> Re
     Ok(output.stdout)
 }
 
+/// Report stderr as it arrives for commands whose stdout is unused.
+pub async fn run_streaming_stderr(
+    cmd: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+    mut on_line: impl FnMut(&str),
+) -> Result<()> {
+    let display = format!("{} {}", cmd, args.join(" "));
+    log::debug!("$ {display}");
+    let mut child = Command::new(cmd)
+        .args(args)
+        .envs(envs.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("failed to spawn {display}"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .with_context(|| format!("failed to capture stderr from {display}"))?;
+    let mut stderr = BufReader::new(stderr);
+    let mut line = Vec::new();
+    while stderr
+        .read_until(b'\n', &mut line)
+        .await
+        .with_context(|| format!("failed to read stderr from {display}"))?
+        != 0
+    {
+        let message = String::from_utf8_lossy(&line);
+        let message = message.trim_end_matches(['\r', '\n']);
+        if !message.is_empty() {
+            on_line(message);
+        }
+        line.clear();
+    }
+
+    let status = child
+        .wait()
+        .await
+        .with_context(|| format!("failed waiting for {display}"))?;
+    anyhow::ensure!(status.success(), "{display} failed: {status}");
+    Ok(())
+}
+
 /// Run `cmd args...` and deserialize the JSON output into a struct of type `T`.
 pub async fn run_json<T: DeserializeOwned>(cmd: &str, args: &[&str]) -> Result<T> {
     run_json_with_env(cmd, args, &[]).await

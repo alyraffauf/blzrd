@@ -1,13 +1,13 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use tokio::time::{Instant, sleep};
+use tokio::time::{sleep, Instant};
 use uuid::Uuid;
 
 use crate::models::{BuildResult, JobSpec, SystemType};
 use crate::op::Operation;
-use crate::process::{run_json, run_json_with_env, run_with_env};
-use crate::ssh::{HostKeyPolicy, run as run_ssh};
+use crate::process::{run_json, run_json_with_env, run_streaming_stderr, run_with_env};
+use crate::ssh::{run as run_ssh, HostKeyPolicy};
 
 /// Build a job's derivation and return the `out` store path.
 pub async fn build_closure(
@@ -83,10 +83,13 @@ pub async fn deploy_closure(
     output_path: &str,
     operation: Operation,
     host_key_policy: HostKeyPolicy,
+    mut report: impl FnMut(&str),
 ) -> Result<()> {
     let target = spec.target();
-    copy_closure(output_path, &target, host_key_policy).await?;
+    report("Copying closure");
+    copy_closure(output_path, &target, host_key_policy, &mut report).await?;
 
+    report("Activating");
     let activation_unit = format!("blzrd-activate-{}", Uuid::new_v4().simple());
     let commands = activation_commands(spec, output_path, operation, &activation_unit)?;
     run_activation_commands(&target, &commands, host_key_policy).await?;
@@ -110,21 +113,25 @@ async fn copy_closure(
     output_path: &str,
     target: &str,
     host_key_policy: HostKeyPolicy,
+    report: impl FnMut(&str),
 ) -> Result<()> {
     let nix_ssh_options = nix_ssh_options(host_key_policy);
     let nix_env = [("NIX_SSHOPTS", nix_ssh_options.as_str())];
     let remote_store = format!("ssh-ng://{target}");
 
-    run_with_env(
+    run_streaming_stderr(
         "nix",
         &[
             "copy",
+            "--log-format",
+            "raw",
             "--to",
             &remote_store,
             output_path,
             "--no-check-sigs",
         ],
         &nix_env,
+        report,
     )
     .await
     .with_context(|| format!("copy to {target}"))?;
@@ -283,9 +290,13 @@ fn parse_systemd_state(output: &[u8]) -> (Option<String>, Option<i32>) {
 
 fn nix_ssh_options(host_key_policy: HostKeyPolicy) -> String {
     let host_key_option = host_key_policy.nix_ssh_option();
+    let defaults = format!(
+        "{host_key_option} -oConnectTimeout=15 -oServerAliveInterval=10 -oServerAliveCountMax=3"
+    );
+    // OpenSSH uses the first value, so explicit NIX_SSHOPTS settings take precedence.
     match std::env::var("NIX_SSHOPTS") {
-        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {host_key_option}"),
-        _ => host_key_option.to_owned(),
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing} {defaults}"),
+        _ => defaults,
     }
 }
 

@@ -32,6 +32,11 @@ impl Ui {
         eprintln!("  ✓ {job}");
     }
 
+    pub fn report_job_progress(&self, job: &str, message: &str) {
+        self.assert_phase_is_active();
+        eprintln!("  {job}: {message}");
+    }
+
     pub fn finish_job_failure(&self, job: &str, error: impl Display) {
         self.assert_phase_is_active();
         eprintln!("  ✗ {job}: {error}");
